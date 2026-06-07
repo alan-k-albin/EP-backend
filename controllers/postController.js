@@ -1,0 +1,148 @@
+import pool from '../config/db.js'
+
+export const createPost = async (req, res) => {
+  const { content, mediaUrl, mediaType } = req.body
+  const userId = req.user.id
+  try {
+    const result = await pool.query(
+      'INSERT INTO posts (user_id, content, media_url, media_type) VALUES ($1, $2, $3, $4) RETURNING *',
+      [userId, content, mediaUrl, mediaType]
+    )
+    res.status(201).json(result.rows[0])
+  } catch (error) {
+    console.error('Create post error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getFeedPosts = async (req, res) => {
+  const userId = req.user.id
+  try {
+    const result = await pool.query(
+      `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified,
+      COUNT(DISTINCT r.id) as reaction_count,
+      COUNT(DISTINCT c.id) as comment_count
+      FROM posts p
+      JOIN users u ON p.user_id = u.id
+      LEFT JOIN reactions r ON r.post_id = p.id
+      LEFT JOIN comments c ON c.post_id = p.id
+      WHERE p.user_id IN (
+        SELECT CASE
+          WHEN sender_id = $1 THEN receiver_id
+          WHEN receiver_id = $1 THEN sender_id
+        END
+        FROM connections
+        WHERE (sender_id = $1 OR receiver_id = $1)
+        AND status = 'accepted'
+      ) OR p.user_id = $1
+      GROUP BY p.id, u.full_name, u.username, u.profile_photo, u.is_verified
+      ORDER BY p.created_at DESC`,
+      [userId]
+    )
+    res.json(result.rows)
+  } catch (error) {
+    console.error('Get feed error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getPost = async (req, res) => {
+  const { id } = req.params
+  try {
+    const result = await pool.query(
+      `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified
+      FROM posts p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.id = $1`,
+      [id]
+    )
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Post not found' })
+    }
+    res.json(result.rows[0])
+  } catch (error) {
+    console.error('Get post error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const updatePost = async (req, res) => {
+  const { id } = req.params
+  const { content } = req.body
+  const userId = req.user.id
+  try {
+    const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
+    if (post.rows[0].user_id !== userId) {
+      return res.status(401).json({ message: 'Not authorized' })
+    }
+    const result = await pool.query(
+      'UPDATE posts SET content = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [content, id]
+    )
+    res.json(result.rows[0])
+  } catch (error) {
+    console.error('Update post error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const deletePost = async (req, res) => {
+  const { id } = req.params
+  const userId = req.user.id
+  try {
+    const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
+    if (post.rows[0].user_id !== userId) {
+      return res.status(401).json({ message: 'Not authorized' })
+    }
+    await pool.query('DELETE FROM posts WHERE id = $1', [id])
+    res.json({ message: 'Post deleted successfully' })
+  } catch (error) {
+    console.error('Delete post error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const reactToPost = async (req, res) => {
+  const { id } = req.params
+  const { type } = req.body
+  const userId = req.user.id
+  try {
+    const existing = await pool.query(
+      'SELECT * FROM reactions WHERE post_id = $1 AND user_id = $2',
+      [id, userId]
+    )
+    if (existing.rows.length > 0) {
+      await pool.query(
+        'DELETE FROM reactions WHERE post_id = $1 AND user_id = $2',
+        [id, userId]
+      )
+      return res.json({ message: 'Reaction removed' })
+    }
+    await pool.query(
+      'INSERT INTO reactions (post_id, user_id, type) VALUES ($1, $2, $3)',
+      [id, userId, type]
+    )
+    res.json({ message: 'Reaction added' })
+  } catch (error) {
+    console.error('React error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getPostsByUser = async (req, res) => {
+  const { userId } = req.params
+  try {
+    const result = await pool.query(
+      `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified
+      FROM posts p
+      JOIN users u ON p.user_id = u.id
+      WHERE p.user_id = $1
+      ORDER BY p.created_at DESC`,
+      [userId]
+    )
+    res.json(result.rows)
+  } catch (error) {
+    console.error('Get user posts error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
