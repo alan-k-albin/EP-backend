@@ -42,7 +42,7 @@ export const getUnreadCount = async (req, res) => {
   }
 }
 
-export const createNotification = async (userId, type, message, pool) => {
+export const createNotification = async (userId, type, message) => {
   try {
     await pool.query(
       'INSERT INTO notifications (user_id, type, message) VALUES ($1, $2, $3)',

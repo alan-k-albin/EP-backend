@@ -9,7 +9,7 @@ const generateToken = (userId) => {
 
 // Register
 export const register = async (req, res) => {
-  const { fullName, username, email, college, password } = req.body
+  const { fullName, username, email, college, password, userType } = req.body
 
   try {
     // Check if email already exists
@@ -29,8 +29,8 @@ export const register = async (req, res) => {
 
     // Save user to database
     const result = await pool.query(
-      'INSERT INTO users (full_name, username, email, college, password) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [fullName, username, email, college, hashedPassword]
+      'INSERT INTO users (full_name, username, email, college, password, user_type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [fullName, username, email, college, hashedPassword, userType || 'public']
     )
 
     const user = result.rows[0]

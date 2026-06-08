@@ -1,4 +1,5 @@
 import pool from '../config/db.js'
+import { createNotification } from './notificationController.js'
 
 export const addComment = async (req, res) => {
   const { id } = req.params
@@ -9,6 +10,15 @@ export const addComment = async (req, res) => {
       'INSERT INTO comments (post_id, user_id, content) VALUES ($1, $2, $3) RETURNING *',
       [id, userId, content]
     )
+    const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
+    if (post.rows[0].user_id !== userId) {
+      const commenter = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
+      await createNotification(
+        post.rows[0].user_id,
+        'comment',
+        `${commenter.rows[0].full_name} commented on your post`
+      )
+    }
     res.status(201).json(result.rows[0])
   } catch (error) {
     console.error('Add comment error:', error)

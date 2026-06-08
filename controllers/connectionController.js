@@ -1,4 +1,5 @@
 import pool from '../config/db.js'
+import { createNotification } from './notificationController.js'
 
 export const sendRequest = async (req, res) => {
   const { receiverId } = req.body
@@ -18,6 +19,12 @@ export const sendRequest = async (req, res) => {
       'INSERT INTO connections (sender_id, receiver_id, status) VALUES ($1, $2, $3) RETURNING *',
       [senderId, receiverId, 'pending']
     )
+    const sender = await pool.query('SELECT full_name FROM users WHERE id = $1', [senderId])
+    await createNotification(
+      receiverId,
+      'connection',
+      `${sender.rows[0].full_name} sent you a connection request`
+    )
     res.status(201).json(result.rows[0])
   } catch (error) {
     console.error('Send request error:', error)
@@ -36,6 +43,12 @@ export const acceptRequest = async (req, res) => {
     const result = await pool.query(
       'UPDATE connections SET status = $1 WHERE id = $2 RETURNING *',
       ['accepted', id]
+    )
+    const acceptor = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
+    await createNotification(
+      connection.rows[0].sender_id,
+      'connection_accepted',
+      `${acceptor.rows[0].full_name} accepted your connection request`
     )
     res.json(result.rows[0])
   } catch (error) {
@@ -79,7 +92,7 @@ export const getMyConnections = async (req, res) => {
   const userId = req.user.id
   try {
     const result = await pool.query(
-      `SELECT c.*, 
+      `SELECT c.*,
       CASE WHEN c.sender_id = $1 THEN u2.full_name ELSE u1.full_name END as full_name,
       CASE WHEN c.sender_id = $1 THEN u2.username ELSE u1.username END as username,
       CASE WHEN c.sender_id = $1 THEN u2.profile_photo ELSE u1.profile_photo END as profile_photo,

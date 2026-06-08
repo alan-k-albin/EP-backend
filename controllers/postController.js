@@ -1,4 +1,5 @@
 import pool from '../config/db.js'
+import { createNotification } from './notificationController.js'
 
 export const createPost = async (req, res) => {
   const { content, mediaUrl, mediaType } = req.body
@@ -21,11 +22,13 @@ export const getFeedPosts = async (req, res) => {
     const result = await pool.query(
       `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified,
       COUNT(DISTINCT r.id) as reaction_count,
-      COUNT(DISTINCT c.id) as comment_count
+      COUNT(DISTINCT c.id) as comment_count,
+      COUNT(DISTINCT a.id) as attempted_count
       FROM posts p
       JOIN users u ON p.user_id = u.id
       LEFT JOIN reactions r ON r.post_id = p.id
       LEFT JOIN comments c ON c.post_id = p.id
+      LEFT JOIN attempted a ON a.post_id = p.id
       WHERE p.user_id IN (
         SELECT CASE
           WHEN sender_id = $1 THEN receiver_id
@@ -122,6 +125,15 @@ export const reactToPost = async (req, res) => {
       'INSERT INTO reactions (post_id, user_id, type) VALUES ($1, $2, $3)',
       [id, userId, type]
     )
+    const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
+    if (post.rows[0].user_id !== userId) {
+      const reactor = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
+      await createNotification(
+        post.rows[0].user_id,
+        'like',
+        `${reactor.rows[0].full_name} liked your post`
+      )
+    }
     res.json({ message: 'Reaction added' })
   } catch (error) {
     console.error('React error:', error)
@@ -143,6 +155,58 @@ export const getPostsByUser = async (req, res) => {
     res.json(result.rows)
   } catch (error) {
     console.error('Get user posts error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const attemptPost = async (req, res) => {
+  const { id } = req.params
+  const userId = req.user.id
+  try {
+    const existing = await pool.query(
+      'SELECT * FROM attempted WHERE post_id = $1 AND user_id = $2',
+      [id, userId]
+    )
+    if (existing.rows.length > 0) {
+      await pool.query(
+        'DELETE FROM attempted WHERE post_id = $1 AND user_id = $2',
+        [id, userId]
+      )
+      return res.json({ message: 'Attempt removed' })
+    }
+    await pool.query(
+      'INSERT INTO attempted (post_id, user_id) VALUES ($1, $2)',
+      [id, userId]
+    )
+    const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
+    if (post.rows[0].user_id !== userId) {
+      const attemptor = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
+      await createNotification(
+        post.rows[0].user_id,
+        'attempted',
+        `${attemptor.rows[0].full_name} attempted your post`
+      )
+    }
+    res.json({ message: 'Attempted!' })
+  } catch (error) {
+    console.error('Attempt error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getAttempted = async (req, res) => {
+  const { id } = req.params
+  try {
+    const result = await pool.query(
+      `SELECT a.*, u.full_name, u.username, u.profile_photo, u.is_verified
+      FROM attempted a
+      JOIN users u ON a.user_id = u.id
+      WHERE a.post_id = $1`,
+      [id]
+    )
+    res.json(result.rows)
+  } catch (error) {
+    console.error('Get attempted error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }
