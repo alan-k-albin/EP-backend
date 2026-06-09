@@ -13,6 +13,7 @@ import notificationRoutes from './routes/notifications.js'
 import searchRoutes from './routes/search.js'
 import chatRoutes from './routes/chat.js'
 import mediaRoutes from './routes/media.js'
+import pollRoutes from './routes/polls.js'
 import chatSocket from './sockets/chatSocket.js'
 
 dotenv.config()
@@ -45,6 +46,7 @@ app.use('/api/notifications', notificationRoutes)
 app.use('/api/search', searchRoutes)
 app.use('/api/chat', chatRoutes)
 app.use('/api/media', mediaRoutes)
+app.use('/api/polls', pollRoutes)
 
 app.get('/', (req, res) => {
   res.json({ message: 'EP Backend is running!' })
