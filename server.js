@@ -20,14 +20,20 @@ dotenv.config()
 const app = express()
 const httpServer = http.createServer(app)
 
+const allowedOrigins = [
+  'https://ep-frontend-snowy.vercel.app',
+  'https://ep-app.vercel.app',
+  'http://localhost:5173'
+]
+
 const io = new Server(httpServer, {
   cors: {
-    origin: 'https://ep-frontend-snowy.vercel.app',
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
   }
 })
 
-app.use(cors({ origin: 'https://ep-frontend-snowy.vercel.app' }))
+app.use(cors({ origin: allowedOrigins }))
 app.use(express.json())
 
 app.use('/api/auth', authRoutes)
