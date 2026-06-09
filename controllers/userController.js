@@ -153,3 +153,65 @@ export const searchUsers = async (req, res) => {
     res.status(500).json({ message: 'Server error' })
   }
 }
+
+export const blockUser = async (req, res) => {
+  const blockerId = req.user.id
+  const { blockedId } = req.body
+  try {
+    await pool.query(
+      'INSERT INTO blocks (blocker_id, blocked_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [blockerId, blockedId]
+    )
+    res.json({ message: 'User blocked' })
+  } catch (error) {
+    console.error('Block user error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const unblockUser = async (req, res) => {
+  const blockerId = req.user.id
+  const { id } = req.params
+  try {
+    await pool.query(
+      'DELETE FROM blocks WHERE blocker_id = $1 AND blocked_id = $2',
+      [blockerId, id]
+    )
+    res.json({ message: 'User unblocked' })
+  } catch (error) {
+    console.error('Unblock user error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getBlockedUsers = async (req, res) => {
+  const userId = req.user.id
+  try {
+    const result = await pool.query(
+      `SELECT u.id, u.full_name, u.username, u.profile_photo
+      FROM blocks b
+      JOIN users u ON b.blocked_id = u.id
+      WHERE b.blocker_id = $1`,
+      [userId]
+    )
+    res.json(result.rows)
+  } catch (error) {
+    console.error('Get blocked users error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const reportContent = async (req, res) => {
+  const reporterId = req.user.id
+  const { reportedUserId, reportedPostId, reason } = req.body
+  try {
+    await pool.query(
+      'INSERT INTO reports (reporter_id, reported_user_id, reported_post_id, reason) VALUES ($1, $2, $3, $4)',
+      [reporterId, reportedUserId, reportedPostId, reason]
+    )
+    res.json({ message: 'Report submitted' })
+  } catch (error) {
+    console.error('Report error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
