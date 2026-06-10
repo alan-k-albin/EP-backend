@@ -87,6 +87,8 @@ export const getMe = async (req, res) => {
       profilePhoto: user.profile_photo,
       isVerified: user.is_verified,
       isPrivate: user.is_private,
+      userType: user.user_type,
+      onboardingCompleted: user.onboarding_completed,
     })
   } catch (error) {
     console.error('GetMe error:', error)
