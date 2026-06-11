@@ -9,10 +9,15 @@ export const getMyProfile = async (req, res) => {
       'SELECT COUNT(*) FROM connections WHERE (sender_id = $1 OR receiver_id = $1) AND status = $2',
       [userId, 'accepted']
     )
-    const experience = await pool.query('SELECT * FROM experience WHERE user_id = $1 ORDER BY created_at DESC', [userId])
-    const education = await pool.query('SELECT * FROM education WHERE user_id = $1 ORDER BY created_at DESC', [userId])
-    const skills = await pool.query('SELECT * FROM skills WHERE user_id = $1', [userId])
-
+    const experience = await pool.query(
+      'SELECT * FROM experience WHERE user_id = $1 ORDER BY created_at DESC', [userId]
+    )
+    const education = await pool.query(
+      'SELECT * FROM education WHERE user_id = $1 ORDER BY created_at DESC', [userId]
+    )
+    const skills = await pool.query(
+      'SELECT * FROM skills WHERE user_id = $1 ORDER BY created_at ASC', [userId]
+    )
     const u = user.rows[0]
     res.json({
       id: u.id,
@@ -58,10 +63,15 @@ export const getUserProfile = async (req, res) => {
       'SELECT COUNT(*) FROM connections WHERE (sender_id = $1 OR receiver_id = $1) AND status = $2',
       [id, 'accepted']
     )
-    const experience = await pool.query('SELECT * FROM experience WHERE user_id = $1 ORDER BY created_at DESC', [id])
-    const education = await pool.query('SELECT * FROM education WHERE user_id = $1 ORDER BY created_at DESC', [id])
-    const skills = await pool.query('SELECT * FROM skills WHERE user_id = $1', [id])
-
+    const experience = await pool.query(
+      'SELECT * FROM experience WHERE user_id = $1 ORDER BY created_at DESC', [id]
+    )
+    const education = await pool.query(
+      'SELECT * FROM education WHERE user_id = $1 ORDER BY created_at DESC', [id]
+    )
+    const skills = await pool.query(
+      'SELECT * FROM skills WHERE user_id = $1 ORDER BY created_at ASC', [id]
+    )
     const u = user.rows[0]
     res.json({
       id: u.id,
@@ -73,7 +83,6 @@ export const getUserProfile = async (req, res) => {
       website: u.website,
       profilePhoto: u.profile_photo,
       isVerified: u.is_verified,
-      isPrivate: u.is_private,
       userType: u.user_type,
       occupation: u.occupation,
       industry: u.industry,
@@ -95,17 +104,42 @@ export const getUserProfile = async (req, res) => {
 
 export const updateProfile = async (req, res) => {
   const userId = req.user.id
-  const { fullName, bio, location, website, occupation, industry, companySize, foundedYear, specialities, currentCompany } = req.body
+  const {
+    fullName, bio, location, website,
+    occupation, industry, companySize,
+    foundedYear, specialities, currentCompany
+  } = req.body
   try {
     const result = await pool.query(
-      `UPDATE users SET 
-        full_name = $1, bio = $2, location = $3, website = $4,
-        occupation = $5, industry = $6, company_size = $7,
-        founded_year = $8, specialities = $9, current_company = $10
+      `UPDATE users SET
+        full_name = COALESCE($1, full_name),
+        bio = $2,
+        location = $3,
+        website = $4,
+        occupation = $5,
+        industry = $6,
+        company_size = $7,
+        founded_year = $8,
+        specialities = $9,
+        current_company = $10
       WHERE id = $11 RETURNING *`,
       [fullName, bio, location, website, occupation, industry, companySize, foundedYear, specialities, currentCompany, userId]
     )
-    res.json(result.rows[0])
+    const u = result.rows[0]
+    res.json({
+      id: u.id,
+      fullName: u.full_name,
+      username: u.username,
+      bio: u.bio,
+      location: u.location,
+      website: u.website,
+      occupation: u.occupation,
+      industry: u.industry,
+      companySize: u.company_size,
+      foundedYear: u.founded_year,
+      specialities: u.specialities,
+      currentCompany: u.current_company,
+    })
   } catch (error) {
     console.error('Update profile error:', error)
     res.status(500).json({ message: 'Server error' })
@@ -114,12 +148,9 @@ export const updateProfile = async (req, res) => {
 
 export const updatePrivacy = async (req, res) => {
   const userId = req.user.id
-  const { isPrivate, whoCanMessage, whoCanConnect } = req.body
+  const { isPrivate } = req.body
   try {
-    await pool.query(
-      'UPDATE users SET is_private = $1 WHERE id = $2',
-      [isPrivate, userId]
-    )
+    await pool.query('UPDATE users SET is_private = $1 WHERE id = $2', [isPrivate, userId])
     res.json({ message: 'Privacy settings updated' })
   } catch (error) {
     console.error('Update privacy error:', error)
@@ -129,13 +160,24 @@ export const updatePrivacy = async (req, res) => {
 
 export const completeOnboarding = async (req, res) => {
   const userId = req.user.id
-  const { userType, onboardingCompleted } = req.body
+  const { userType } = req.body
   try {
     await pool.query(
-      'UPDATE users SET user_type = $1, onboarding_completed = $2 WHERE id = $3',
-      [userType, onboardingCompleted, userId]
+      'UPDATE users SET user_type = $1, onboarding_completed = TRUE WHERE id = $2',
+      [userType, userId]
     )
-    res.json({ message: 'Onboarding completed' })
+    const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId])
+    const u = result.rows[0]
+    res.json({
+      id: u.id,
+      fullName: u.full_name,
+      username: u.username,
+      email: u.email,
+      userType: u.user_type,
+      onboardingCompleted: u.onboarding_completed,
+      profilePhoto: u.profile_photo,
+      isVerified: u.is_verified,
+    })
   } catch (error) {
     console.error('Onboarding error:', error)
     res.status(500).json({ message: 'Server error' })
@@ -144,11 +186,11 @@ export const completeOnboarding = async (req, res) => {
 
 export const addExperience = async (req, res) => {
   const userId = req.user.id
-  const { title, company, startDate, endDate, current, description } = req.body
+  const { title, company, startDate, endDate, current } = req.body
   try {
     const result = await pool.query(
       'INSERT INTO experience (user_id, title, company, start_date, end_date, current) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [userId, title, company, startDate, endDate, current]
+      [userId, title, company, startDate, endDate || null, current || false]
     )
     res.status(201).json(result.rows[0])
   } catch (error) {
@@ -163,9 +205,15 @@ export const updateExperience = async (req, res) => {
   const userId = req.user.id
   try {
     const result = await pool.query(
-      'UPDATE experience SET title = $1, company = $2, start_date = $3, end_date = $4, current = $5 WHERE id = $6 AND user_id = $7 RETURNING *',
-      [title, company, startDate, endDate, current, expId, userId]
+      `UPDATE experience SET 
+        title = $1, company = $2, start_date = $3, 
+        end_date = $4, current = $5 
+      WHERE id = $6 AND user_id = $7 RETURNING *`,
+      [title, company, startDate, endDate || null, current || false, expId, userId]
     )
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Experience not found' })
+    }
     res.json(result.rows[0])
   } catch (error) {
     console.error('Update experience error:', error)
@@ -191,7 +239,7 @@ export const addEducation = async (req, res) => {
   try {
     const result = await pool.query(
       'INSERT INTO education (user_id, institution, degree, field, start_year, end_year) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [userId, institution, degree, field, startYear, endYear]
+      [userId, institution, degree || null, field || null, startYear || null, endYear || null]
     )
     res.status(201).json(result.rows[0])
   } catch (error) {
@@ -206,9 +254,15 @@ export const updateEducation = async (req, res) => {
   const userId = req.user.id
   try {
     const result = await pool.query(
-      'UPDATE education SET institution = $1, degree = $2, field = $3, start_year = $4, end_year = $5 WHERE id = $6 AND user_id = $7 RETURNING *',
-      [institution, degree, field, startYear, endYear, eduId, userId]
+      `UPDATE education SET 
+        institution = $1, degree = $2, field = $3, 
+        start_year = $4, end_year = $5 
+      WHERE id = $6 AND user_id = $7 RETURNING *`,
+      [institution, degree || null, field || null, startYear || null, endYear || null, eduId, userId]
     )
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Education not found' })
+    }
     res.json(result.rows[0])
   } catch (error) {
     console.error('Update education error:', error)
@@ -232,6 +286,13 @@ export const addSkill = async (req, res) => {
   const userId = req.user.id
   const { name } = req.body
   try {
+    const existing = await pool.query(
+      'SELECT * FROM skills WHERE user_id = $1 AND LOWER(name) = LOWER($2)',
+      [userId, name]
+    )
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ message: 'Skill already added' })
+    }
     const result = await pool.query(
       'INSERT INTO skills (user_id, name) VALUES ($1, $2) RETURNING *',
       [userId, name]
@@ -325,7 +386,7 @@ export const reportContent = async (req, res) => {
   try {
     await pool.query(
       'INSERT INTO reports (reporter_id, reported_user_id, reported_post_id, reason) VALUES ($1, $2, $3, $4)',
-      [reporterId, reportedUserId, reportedPostId, reason]
+      [reporterId, reportedUserId || null, reportedPostId || null, reason]
     )
     res.json({ message: 'Report submitted' })
   } catch (error) {

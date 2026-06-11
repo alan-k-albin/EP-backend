@@ -19,8 +19,10 @@ export const register = async (req, res) => {
     }
     const hashedPassword = await bcrypt.hash(password, 10)
     const result = await pool.query(
-      'INSERT INTO users (full_name, username, email, college, password, user_type) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [fullName, username, email, college, hashedPassword, userType || 'public']
+      `INSERT INTO users 
+      (full_name, username, email, college, password, user_type, onboarding_completed) 
+      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [fullName, username, email, college, hashedPassword, userType || null, false]
     )
     const user = result.rows[0]
     res.status(201).json({
@@ -32,6 +34,10 @@ export const register = async (req, res) => {
         username: user.username,
         email: user.email,
         college: user.college,
+        userType: user.user_type,
+        onboardingCompleted: user.onboarding_completed,
+        profilePhoto: user.profile_photo,
+        isVerified: user.is_verified,
       }
     })
   } catch (error) {
@@ -63,6 +69,8 @@ export const login = async (req, res) => {
         college: user.college,
         profilePhoto: user.profile_photo,
         isVerified: user.is_verified,
+        userType: user.user_type,
+        onboardingCompleted: user.onboarding_completed,
       }
     })
   } catch (error) {
@@ -89,6 +97,12 @@ export const getMe = async (req, res) => {
       isPrivate: user.is_private,
       userType: user.user_type,
       onboardingCompleted: user.onboarding_completed,
+      occupation: user.occupation,
+      industry: user.industry,
+      companySize: user.company_size,
+      foundedYear: user.founded_year,
+      specialities: user.specialities,
+      currentCompany: user.current_company,
     })
   } catch (error) {
     console.error('GetMe error:', error)
@@ -105,10 +119,7 @@ export const forgotPassword = async (req, res) => {
     }
     const user = result.rows[0]
     const resetToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, { expiresIn: '1h' })
-    res.json({
-      message: 'Password reset link sent!',
-      resetToken,
-    })
+    res.json({ message: 'Password reset link sent!', resetToken })
   } catch (error) {
     console.error('Forgot password error:', error)
     res.status(500).json({ message: 'Server error' })
@@ -170,6 +181,29 @@ export const deleteAccount = async (req, res) => {
     res.json({ message: 'Account deleted successfully' })
   } catch (error) {
     console.error('Delete account error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const verifyStudent = async (req, res) => {
+  const { method, institutionalEmail, college, idNumber, idPhoto } = req.body
+  const userId = req.user.id
+  try {
+    if (method === 'email') {
+      const institutionalEmailRegex = /^[^\s@]+@[^\s@]+\.(ac\.in|edu|ac\.uk|edu\.au|ac\.nz|edu\.in|ac\.za|edu\.sg)$/i
+      if (!institutionalEmailRegex.test(institutionalEmail)) {
+        return res.status(400).json({ message: 'Please use a valid institutional email address' })
+      }
+      await pool.query('UPDATE users SET is_verified = true WHERE id = $1', [userId])
+      return res.json({ message: 'Verified successfully!', verified: true })
+    }
+    await pool.query(
+      'INSERT INTO verifications (user_id, college, id_number, id_photo, status) VALUES ($1, $2, $3, $4, $5)',
+      [userId, college, idNumber, idPhoto || null, 'pending']
+    )
+    res.json({ message: 'Verification request submitted. We will review within 1-2 business days.' })
+  } catch (error) {
+    console.error('Verify student error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }
