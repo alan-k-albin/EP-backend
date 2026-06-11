@@ -23,6 +23,7 @@ import protect from '../middleware/authMiddleware.js'
 
 const router = express.Router()
 
+// IMPORTANT: specific routes must come before /:id
 router.get('/me', protect, getMyProfile)
 router.get('/search', protect, searchUsers)
 router.get('/blocked', protect, getBlockedUsers)

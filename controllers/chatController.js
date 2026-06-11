@@ -4,28 +4,39 @@ export const getMyChats = async (req, res) => {
   const userId = req.user.id
   try {
     const result = await pool.query(
-      `SELECT c.*, 
-      m.content as last_message,
-      m.created_at as last_message_time,
+      `SELECT DISTINCT c.*,
       CASE 
-        WHEN c.is_group = false THEN u.full_name
+        WHEN c.is_group = false THEN (
+          SELECT u.full_name FROM users u
+          JOIN chat_members cm2 ON cm2.user_id = u.id
+          WHERE cm2.chat_id = c.id AND cm2.user_id != $1
+          LIMIT 1
+        )
         ELSE c.group_name
       END as name,
       CASE 
-        WHEN c.is_group = false THEN u.profile_photo
+        WHEN c.is_group = false THEN (
+          SELECT u.profile_photo FROM users u
+          JOIN chat_members cm2 ON cm2.user_id = u.id
+          WHERE cm2.chat_id = c.id AND cm2.user_id != $1
+          LIMIT 1
+        )
         ELSE null
-      END as photo
+      END as photo,
+      (
+        SELECT m.content FROM messages m
+        WHERE m.chat_id = c.id
+        ORDER BY m.created_at DESC LIMIT 1
+      ) as last_message,
+      (
+        SELECT m.created_at FROM messages m
+        WHERE m.chat_id = c.id
+        ORDER BY m.created_at DESC LIMIT 1
+      ) as last_message_time
       FROM chats c
       JOIN chat_members cm ON cm.chat_id = c.id
-      LEFT JOIN messages m ON m.id = (
-        SELECT id FROM messages 
-        WHERE chat_id = c.id 
-        ORDER BY created_at DESC LIMIT 1
-      )
-      LEFT JOIN chat_members cm2 ON cm2.chat_id = c.id AND cm2.user_id != $1
-      LEFT JOIN users u ON u.id = cm2.user_id
       WHERE cm.user_id = $1
-      ORDER BY last_message_time DESC`,
+      ORDER BY last_message_time DESC NULLS LAST`,
       [userId]
     )
     res.json(result.rows)
@@ -37,7 +48,15 @@ export const getMyChats = async (req, res) => {
 
 export const getChatMessages = async (req, res) => {
   const { id } = req.params
+  const userId = req.user.id
   try {
+    const memberCheck = await pool.query(
+      'SELECT * FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+      [id, userId]
+    )
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({ message: 'Not a member of this chat' })
+    }
     const result = await pool.query(
       `SELECT m.*, u.full_name, u.username, u.profile_photo
       FROM messages m
@@ -57,6 +76,9 @@ export const createChat = async (req, res) => {
   const { receiverId } = req.body
   const userId = req.user.id
   try {
+    if (userId === receiverId) {
+      return res.status(400).json({ message: 'Cannot chat with yourself' })
+    }
     const existing = await pool.query(
       `SELECT c.id FROM chats c
       JOIN chat_members cm1 ON cm1.chat_id = c.id AND cm1.user_id = $1
@@ -86,6 +108,9 @@ export const createGroupChat = async (req, res) => {
   const { groupName, memberIds } = req.body
   const userId = req.user.id
   try {
+    if (!groupName || !memberIds || memberIds.length === 0) {
+      return res.status(400).json({ message: 'Group name and members are required' })
+    }
     const chat = await pool.query(
       'INSERT INTO chats (is_group, group_name) VALUES (true, $1) RETURNING *',
       [groupName]
@@ -94,11 +119,11 @@ export const createGroupChat = async (req, res) => {
     const allMembers = [userId, ...memberIds]
     for (const memberId of allMembers) {
       await pool.query(
-        'INSERT INTO chat_members (chat_id, user_id) VALUES ($1, $2)',
+        'INSERT INTO chat_members (chat_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
         [chatId, memberId]
       )
     }
-    res.status(201).json({ chatId })
+    res.status(201).json({ chatId, chat: chat.rows[0] })
   } catch (error) {
     console.error('Create group chat error:', error)
     res.status(500).json({ message: 'Server error' })
@@ -110,13 +135,55 @@ export const sendMessage = async (req, res) => {
   const { content, mediaUrl, mediaType } = req.body
   const userId = req.user.id
   try {
-    const result = await pool.query(
-      'INSERT INTO messages (chat_id, sender_id, content, media_url, media_type) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-      [id, userId, content, mediaUrl, mediaType]
+    const memberCheck = await pool.query(
+      'SELECT * FROM chat_members WHERE chat_id = $1 AND user_id = $2',
+      [id, userId]
     )
-    res.status(201).json(result.rows[0])
+    if (memberCheck.rows.length === 0) {
+      return res.status(403).json({ message: 'Not a member of this chat' })
+    }
+    const result = await pool.query(
+      `INSERT INTO messages (chat_id, sender_id, content, media_url, media_type) 
+      VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [id, userId, content || null, mediaUrl || null, mediaType || null]
+    )
+    const messageWithUser = await pool.query(
+      `SELECT m.*, u.full_name, u.username, u.profile_photo
+      FROM messages m
+      JOIN users u ON m.sender_id = u.id
+      WHERE m.id = $1`,
+      [result.rows[0].id]
+    )
+    res.status(201).json(messageWithUser.rows[0])
   } catch (error) {
     console.error('Send message error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getChatInfo = async (req, res) => {
+  const { id } = req.params
+  const userId = req.user.id
+  try {
+    const chat = await pool.query('SELECT * FROM chats WHERE id = $1', [id])
+    if (chat.rows.length === 0) {
+      return res.status(404).json({ message: 'Chat not found' })
+    }
+    const members = await pool.query(
+      `SELECT u.id, u.full_name, u.username, u.profile_photo, u.is_verified
+      FROM chat_members cm
+      JOIN users u ON cm.user_id = u.id
+      WHERE cm.chat_id = $1`,
+      [id]
+    )
+    const otherMember = members.rows.find((m) => m.id !== userId)
+    res.json({
+      ...chat.rows[0],
+      members: members.rows,
+      otherMember,
+    })
+  } catch (error) {
+    console.error('Get chat info error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }

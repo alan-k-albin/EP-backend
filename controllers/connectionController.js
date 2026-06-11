@@ -6,7 +6,7 @@ export const sendRequest = async (req, res) => {
   const senderId = req.user.id
   try {
     if (senderId === receiverId) {
-      return res.status(400).json({ message: 'Cannot connect with yourself' })
+      return res.status(400).json({ message: 'You cannot connect with yourself' })
     }
     const existing = await pool.query(
       'SELECT * FROM connections WHERE (sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1)',
@@ -37,7 +37,7 @@ export const acceptRequest = async (req, res) => {
   const userId = req.user.id
   try {
     const connection = await pool.query('SELECT * FROM connections WHERE id = $1', [id])
-    if (connection.rows[0].receiver_id !== userId) {
+    if (!connection.rows[0] || connection.rows[0].receiver_id !== userId) {
       return res.status(401).json({ message: 'Not authorized' })
     }
     const result = await pool.query(
@@ -62,7 +62,7 @@ export const declineRequest = async (req, res) => {
   const userId = req.user.id
   try {
     const connection = await pool.query('SELECT * FROM connections WHERE id = $1', [id])
-    if (connection.rows[0].receiver_id !== userId) {
+    if (!connection.rows[0] || connection.rows[0].receiver_id !== userId) {
       return res.status(401).json({ message: 'Not authorized' })
     }
     await pool.query('DELETE FROM connections WHERE id = $1', [id])
@@ -116,15 +116,46 @@ export const getPendingRequests = async (req, res) => {
   const userId = req.user.id
   try {
     const result = await pool.query(
-      `SELECT c.*, u.full_name, u.username, u.profile_photo, u.is_verified
+      `SELECT c.*, u.full_name, u.username, u.profile_photo, u.is_verified, u.college, u.user_type
       FROM connections c
       JOIN users u ON c.sender_id = u.id
-      WHERE c.receiver_id = $1 AND c.status = 'pending'`,
+      WHERE c.receiver_id = $1 AND c.status = 'pending'
+      ORDER BY c.created_at DESC`,
       [userId]
     )
     res.json(result.rows)
   } catch (error) {
     console.error('Get pending requests error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getConnectionStatus = async (req, res) => {
+  const { userId } = req.params
+  const myId = req.user.id
+  try {
+    const result = await pool.query(
+      `SELECT * FROM connections 
+      WHERE (sender_id = $1 AND receiver_id = $2) 
+      OR (sender_id = $2 AND receiver_id = $1)`,
+      [myId, userId]
+    )
+    if (result.rows.length === 0) {
+      return res.json({ status: 'none' })
+    }
+    const conn = result.rows[0]
+    if (conn.status === 'accepted') {
+      return res.json({ status: 'connected', connectionId: conn.id })
+    }
+    if (conn.status === 'pending' && conn.sender_id === myId) {
+      return res.json({ status: 'pending_sent', connectionId: conn.id })
+    }
+    if (conn.status === 'pending' && conn.receiver_id === myId) {
+      return res.json({ status: 'pending_received', connectionId: conn.id })
+    }
+    res.json({ status: 'none' })
+  } catch (error) {
+    console.error('Get connection status error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }

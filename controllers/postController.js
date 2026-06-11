@@ -2,15 +2,13 @@ import pool from '../config/db.js'
 import { createNotification } from './notificationController.js'
 
 export const createPost = async (req, res) => {
-  const { content, mediaUrl, mediaType } = req.body
+  const { content, mediaUrl, mediaType, question } = req.body
   const userId = req.user.id
   try {
     const result = await pool.query(
-      'INSERT INTO posts (user_id, content, media_url, media_type) VALUES ($1, $2, $3, $4) RETURNING *',
-      [userId, content, mediaUrl, mediaType]
+      'INSERT INTO posts (user_id, content, media_url, media_type, question) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [userId, content, mediaUrl || null, mediaType || null, question || null]
     )
-
-    // Extract and save hashtags
     const hashtags = content.match(/#\w+/g)
     if (hashtags) {
       for (const tag of hashtags) {
@@ -29,7 +27,6 @@ export const createPost = async (req, res) => {
         )
       }
     }
-
     res.status(201).json(result.rows[0])
   } catch (error) {
     console.error('Create post error:', error)
@@ -53,17 +50,21 @@ export const getFeedPosts = async (req, res) => {
       LEFT JOIN reactions r ON r.post_id = p.id
       LEFT JOIN comments c ON c.post_id = p.id
       LEFT JOIN attempted a ON a.post_id = p.id
-      WHERE p.user_id IN (
-        SELECT CASE
-          WHEN sender_id = $1 THEN receiver_id
-          WHEN receiver_id = $1 THEN sender_id
-        END
-        FROM connections
-        WHERE (sender_id = $1 OR receiver_id = $1)
-        AND status = 'accepted'
-      ) OR p.user_id = $1
+      WHERE p.user_id NOT IN (
+        SELECT blocked_id FROM blocks WHERE blocker_id = $1
+      )
       GROUP BY p.id, u.full_name, u.username, u.profile_photo, u.is_verified
-      ORDER BY p.created_at DESC`,
+      ORDER BY 
+        CASE WHEN p.user_id IN (
+          SELECT CASE
+            WHEN sender_id = $1 THEN receiver_id
+            WHEN receiver_id = $1 THEN sender_id
+          END
+          FROM connections
+          WHERE (sender_id = $1 OR receiver_id = $1)
+          AND status = 'accepted'
+        ) OR p.user_id = $1 THEN 0 ELSE 1 END,
+        p.created_at DESC`,
       [userId]
     )
     res.json(result.rows)
@@ -75,13 +76,23 @@ export const getFeedPosts = async (req, res) => {
 
 export const getPost = async (req, res) => {
   const { id } = req.params
+  const userId = req.user.id
   try {
     const result = await pool.query(
-      `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified
+      `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified,
+      COUNT(DISTINCT r.id) as reaction_count,
+      COUNT(DISTINCT c.id) as comment_count,
+      COUNT(DISTINCT a.id) as attempted_count,
+      EXISTS(SELECT 1 FROM reactions r2 WHERE r2.post_id = p.id AND r2.user_id = $2) as liked,
+      EXISTS(SELECT 1 FROM attempted a2 WHERE a2.post_id = p.id AND a2.user_id = $2) as attempted
       FROM posts p
       JOIN users u ON p.user_id = u.id
-      WHERE p.id = $1`,
-      [id]
+      LEFT JOIN reactions r ON r.post_id = p.id
+      LEFT JOIN comments c ON c.post_id = p.id
+      LEFT JOIN attempted a ON a.post_id = p.id
+      WHERE p.id = $1
+      GROUP BY p.id, u.full_name, u.username, u.profile_photo, u.is_verified`,
+      [id, userId]
     )
     if (result.rows.length === 0) {
       return res.status(404).json({ message: 'Post not found' })
@@ -99,7 +110,7 @@ export const updatePost = async (req, res) => {
   const userId = req.user.id
   try {
     const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
-    if (post.rows[0].user_id !== userId) {
+    if (!post.rows[0] || post.rows[0].user_id !== userId) {
       return res.status(401).json({ message: 'Not authorized' })
     }
     const result = await pool.query(
@@ -118,7 +129,7 @@ export const deletePost = async (req, res) => {
   const userId = req.user.id
   try {
     const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
-    if (post.rows[0].user_id !== userId) {
+    if (!post.rows[0] || post.rows[0].user_id !== userId) {
       return res.status(401).json({ message: 'Not authorized' })
     }
     await pool.query('DELETE FROM posts WHERE id = $1', [id])
@@ -140,38 +151,40 @@ export const reactToPost = async (req, res) => {
     )
     if (existing.rows.length > 0) {
       await pool.query('DELETE FROM reactions WHERE post_id = $1 AND user_id = $2', [id, userId])
-      return res.json({ message: 'Reaction removed' })
+      const count = await pool.query('SELECT COUNT(*) FROM reactions WHERE post_id = $1', [id])
+      return res.json({ liked: false, count: count.rows[0].count })
     }
     await pool.query(
       'INSERT INTO reactions (post_id, user_id, type) VALUES ($1, $2, $3)',
       [id, userId, type]
     )
     const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
-    if (post.rows[0].user_id !== userId) {
+    if (post.rows[0] && post.rows[0].user_id !== userId) {
       const reactor = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
       await createNotification(post.rows[0].user_id, 'like', `${reactor.rows[0].full_name} liked your post`)
     }
-    res.json({ message: 'Reaction added' })
+    const count = await pool.query('SELECT COUNT(*) FROM reactions WHERE post_id = $1', [id])
+    res.json({ liked: true, count: count.rows[0].count })
   } catch (error) {
     console.error('React error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }
 
-export const getPostsByUser = async (req, res) => {
-  const { userId } = req.params
+export const getWhoLiked = async (req, res) => {
+  const { id } = req.params
   try {
     const result = await pool.query(
-      `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified
-      FROM posts p
-      JOIN users u ON p.user_id = u.id
-      WHERE p.user_id = $1
-      ORDER BY p.created_at DESC`,
-      [userId]
+      `SELECT u.id, u.full_name, u.username, u.profile_photo, u.is_verified
+      FROM reactions r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.post_id = $1
+      ORDER BY r.created_at DESC`,
+      [id]
     )
     res.json(result.rows)
   } catch (error) {
-    console.error('Get user posts error:', error)
+    console.error('Get who liked error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }
@@ -186,34 +199,62 @@ export const attemptPost = async (req, res) => {
     )
     if (existing.rows.length > 0) {
       await pool.query('DELETE FROM attempted WHERE post_id = $1 AND user_id = $2', [id, userId])
-      return res.json({ message: 'Attempt removed' })
+      const count = await pool.query('SELECT COUNT(*) FROM attempted WHERE post_id = $1', [id])
+      return res.json({ attempted: false, count: count.rows[0].count })
     }
     await pool.query('INSERT INTO attempted (post_id, user_id) VALUES ($1, $2)', [id, userId])
     const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
-    if (post.rows[0].user_id !== userId) {
+    if (post.rows[0] && post.rows[0].user_id !== userId) {
       const attemptor = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
       await createNotification(post.rows[0].user_id, 'attempted', `${attemptor.rows[0].full_name} attempted your post`)
     }
-    res.json({ message: 'Attempted!' })
+    const count = await pool.query('SELECT COUNT(*) FROM attempted WHERE post_id = $1', [id])
+    res.json({ attempted: true, count: count.rows[0].count })
   } catch (error) {
     console.error('Attempt error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }
 
-export const getAttempted = async (req, res) => {
+export const getWhoAttempted = async (req, res) => {
   const { id } = req.params
   try {
     const result = await pool.query(
-      `SELECT a.*, u.full_name, u.username, u.profile_photo, u.is_verified
+      `SELECT u.id, u.full_name, u.username, u.profile_photo, u.is_verified
       FROM attempted a
       JOIN users u ON a.user_id = u.id
-      WHERE a.post_id = $1`,
+      WHERE a.post_id = $1
+      ORDER BY a.created_at DESC`,
       [id]
     )
     res.json(result.rows)
   } catch (error) {
-    console.error('Get attempted error:', error)
+    console.error('Get who attempted error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getPostsByUser = async (req, res) => {
+  const { userId } = req.params
+  try {
+    const result = await pool.query(
+      `SELECT p.*, u.full_name, u.username, u.profile_photo, u.is_verified,
+      COUNT(DISTINCT r.id) as reaction_count,
+      COUNT(DISTINCT c.id) as comment_count,
+      COUNT(DISTINCT a.id) as attempted_count
+      FROM posts p
+      JOIN users u ON p.user_id = u.id
+      LEFT JOIN reactions r ON r.post_id = p.id
+      LEFT JOIN comments c ON c.post_id = p.id
+      LEFT JOIN attempted a ON a.post_id = p.id
+      WHERE p.user_id = $1
+      GROUP BY p.id, u.full_name, u.username, u.profile_photo, u.is_verified
+      ORDER BY p.created_at DESC`,
+      [userId]
+    )
+    res.json(result.rows)
+  } catch (error) {
+    console.error('Get user posts error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }
@@ -228,10 +269,10 @@ export const bookmarkPost = async (req, res) => {
     )
     if (existing.rows.length > 0) {
       await pool.query('DELETE FROM bookmarks WHERE post_id = $1 AND user_id = $2', [id, userId])
-      return res.json({ message: 'Bookmark removed', bookmarked: false })
+      return res.json({ bookmarked: false })
     }
     await pool.query('INSERT INTO bookmarks (post_id, user_id) VALUES ($1, $2)', [id, userId])
-    res.json({ message: 'Bookmarked!', bookmarked: true })
+    res.json({ bookmarked: true })
   } catch (error) {
     console.error('Bookmark error:', error)
     res.status(500).json({ message: 'Server error' })

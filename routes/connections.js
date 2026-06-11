@@ -5,7 +5,8 @@ import {
   declineRequest,
   removeConnection,
   getMyConnections,
-  getPendingRequests
+  getPendingRequests,
+  getConnectionStatus
 } from '../controllers/connectionController.js'
 import protect from '../middleware/authMiddleware.js'
 
@@ -17,5 +18,6 @@ router.delete('/decline/:id', protect, declineRequest)
 router.delete('/remove/:id', protect, removeConnection)
 router.get('/my', protect, getMyConnections)
 router.get('/pending', protect, getPendingRequests)
+router.get('/status/:userId', protect, getConnectionStatus)
 
 export default router

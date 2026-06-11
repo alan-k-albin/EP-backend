@@ -6,9 +6,10 @@ import {
   updatePost,
   deletePost,
   reactToPost,
-  getPostsByUser,
+  getWhoLiked,
   attemptPost,
-  getAttempted,
+  getWhoAttempted,
+  getPostsByUser,
   bookmarkPost,
   getBookmarks,
   repostPost,
@@ -27,8 +28,9 @@ router.get('/:id', protect, getPost)
 router.put('/:id', protect, updatePost)
 router.delete('/:id', protect, deletePost)
 router.post('/:id/react', protect, reactToPost)
+router.get('/:id/liked', protect, getWhoLiked)
 router.post('/:id/attempt', protect, attemptPost)
-router.get('/:id/attempted', protect, getAttempted)
+router.get('/:id/attempted', protect, getWhoAttempted)
 router.post('/:id/bookmark', protect, bookmarkPost)
 router.post('/:id/repost', protect, repostPost)
 
