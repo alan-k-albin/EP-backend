@@ -10,13 +10,13 @@ export const getMyProfile = async (req, res) => {
       [userId, 'accepted']
     )
     const experience = await pool.query(
-      'SELECT * FROM experience WHERE user_id = $1 ORDER BY created_at DESC', [userId]
+      'SELECT * FROM experience WHERE user_id = $1 ORDER BY id DESC', [userId]
     )
     const education = await pool.query(
-      'SELECT * FROM education WHERE user_id = $1 ORDER BY created_at DESC', [userId]
+      'SELECT * FROM education WHERE user_id = $1 ORDER BY id DESC', [userId]
     )
     const skills = await pool.query(
-      'SELECT * FROM skills WHERE user_id = $1 ORDER BY created_at ASC', [userId]
+      'SELECT * FROM skills WHERE user_id = $1 ORDER BY id ASC', [userId]
     )
     const u = user.rows[0]
     res.json({
@@ -64,13 +64,13 @@ export const getUserProfile = async (req, res) => {
       [id, 'accepted']
     )
     const experience = await pool.query(
-      'SELECT * FROM experience WHERE user_id = $1 ORDER BY created_at DESC', [id]
+      'SELECT * FROM experience WHERE user_id = $1 ORDER BY id DESC', [id]
     )
     const education = await pool.query(
-      'SELECT * FROM education WHERE user_id = $1 ORDER BY created_at DESC', [id]
+      'SELECT * FROM education WHERE user_id = $1 ORDER BY id DESC', [id]
     )
     const skills = await pool.query(
-      'SELECT * FROM skills WHERE user_id = $1 ORDER BY created_at ASC', [id]
+      'SELECT * FROM skills WHERE user_id = $1 ORDER BY id ASC', [id]
     )
     const u = user.rows[0]
     res.json({
