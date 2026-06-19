@@ -38,6 +38,8 @@ export const register = async (req, res) => {
         onboardingCompleted: user.onboarding_completed,
         profilePhoto: user.profile_photo,
         isVerified: user.is_verified,
+        isAdmin: user.is_admin,
+        isBanned: user.is_banned,
       }
     })
   } catch (error) {
@@ -58,6 +60,9 @@ export const login = async (req, res) => {
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid email or password' })
     }
+    if (user.is_banned) {
+      return res.status(403).json({ message: 'Your account has been banned. Please contact support.' })
+    }
     res.json({
       message: 'Login successful!',
       token: generateToken(user.id),
@@ -71,6 +76,8 @@ export const login = async (req, res) => {
         isVerified: user.is_verified,
         userType: user.user_type,
         onboardingCompleted: user.onboarding_completed,
+        isAdmin: user.is_admin,
+        isBanned: user.is_banned,
       }
     })
   } catch (error) {
@@ -103,6 +110,8 @@ export const getMe = async (req, res) => {
       foundedYear: user.founded_year,
       specialities: user.specialities,
       currentCompany: user.current_company,
+      isAdmin: user.is_admin,
+      isBanned: user.is_banned,
     })
   } catch (error) {
     console.error('GetMe error:', error)
