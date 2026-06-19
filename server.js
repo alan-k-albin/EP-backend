@@ -14,7 +14,7 @@ import searchRoutes from './routes/search.js'
 import chatRoutes from './routes/chat.js'
 import mediaRoutes from './routes/media.js'
 import pollRoutes from './routes/polls.js'
-import adminRoutes from './routes/adminRoutes.js'
+import adminRoutes from './routes/admin.js'
 import chatSocket from './sockets/chatSocket.js'
 
 dotenv.config()
