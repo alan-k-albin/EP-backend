@@ -399,8 +399,8 @@ export const changeUsername = async (req, res) => {
   const userId = req.user.id
   const { username } = req.body
   try {
-    if (!username || username.trim().length < 3) {
-      return res.status(400).json({ message: 'Username must be at least 3 characters' })
+    if (!username || username.trim().length < 6) {
+      return res.status(400).json({ message: 'Username must be at least 6 characters' })
     }
     if (!/^[a-zA-Z0-9_]+$/.test(username)) {
       return res.status(400).json({ message: 'Username can only contain letters, numbers and underscores' })
