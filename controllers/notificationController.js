@@ -4,7 +4,14 @@ export const getNotifications = async (req, res) => {
   const userId = req.user.id
   try {
     const result = await pool.query(
-      'SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC',
+      `SELECT n.*, 
+        u.full_name as sender_name, 
+        u.profile_photo as sender_photo,
+        u.username as sender_username
+       FROM notifications n
+       LEFT JOIN users u ON n.sender_id = u.id
+       WHERE n.user_id = $1 
+       ORDER BY n.created_at DESC`,
       [userId]
     )
     res.json(result.rows)
@@ -42,11 +49,11 @@ export const getUnreadCount = async (req, res) => {
   }
 }
 
-export const createNotification = async (userId, type, message) => {
+export const createNotification = async (userId, type, message, senderId = null, relatedId = null) => {
   try {
     await pool.query(
-      'INSERT INTO notifications (user_id, type, message) VALUES ($1, $2, $3)',
-      [userId, type, message]
+      'INSERT INTO notifications (user_id, type, message, sender_id, related_id) VALUES ($1, $2, $3, $4, $5)',
+      [userId, type, message, senderId, relatedId]
     )
   } catch (error) {
     console.error('Create notification error:', error)

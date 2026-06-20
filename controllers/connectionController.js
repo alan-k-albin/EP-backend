@@ -22,8 +22,10 @@ export const sendRequest = async (req, res) => {
     const sender = await pool.query('SELECT full_name FROM users WHERE id = $1', [senderId])
     await createNotification(
       receiverId,
-      'connection',
-      `${sender.rows[0].full_name} sent you a connection request`
+      'connection_request',
+      `${sender.rows[0].full_name} sent you a connection request`,
+      senderId,
+      senderId
     )
     res.status(201).json(result.rows[0])
   } catch (error) {
@@ -48,7 +50,9 @@ export const acceptRequest = async (req, res) => {
     await createNotification(
       connection.rows[0].sender_id,
       'connection_accepted',
-      `${acceptor.rows[0].full_name} accepted your connection request`
+      `${acceptor.rows[0].full_name} accepted your connection request`,
+      userId,
+      userId
     )
     res.json(result.rows[0])
   } catch (error) {

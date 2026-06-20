@@ -161,7 +161,13 @@ export const reactToPost = async (req, res) => {
     const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
     if (post.rows[0] && post.rows[0].user_id !== userId) {
       const reactor = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
-      await createNotification(post.rows[0].user_id, 'like', `${reactor.rows[0].full_name} liked your post`)
+      await createNotification(
+        post.rows[0].user_id,
+        'like',
+        `${reactor.rows[0].full_name} liked your post`,
+        userId,
+        post.rows[0].id
+      )
     }
     const count = await pool.query('SELECT COUNT(*) FROM reactions WHERE post_id = $1', [id])
     res.json({ liked: true, count: count.rows[0].count })
@@ -206,7 +212,13 @@ export const attemptPost = async (req, res) => {
     const post = await pool.query('SELECT * FROM posts WHERE id = $1', [id])
     if (post.rows[0] && post.rows[0].user_id !== userId) {
       const attemptor = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
-      await createNotification(post.rows[0].user_id, 'attempted', `${attemptor.rows[0].full_name} attempted your post`)
+      await createNotification(
+        post.rows[0].user_id,
+        'attempted',
+        `${attemptor.rows[0].full_name} attempted your post`,
+        userId,
+        post.rows[0].id
+      )
     }
     const count = await pool.query('SELECT COUNT(*) FROM attempted WHERE post_id = $1', [id])
     res.json({ attempted: true, count: count.rows[0].count })
@@ -320,7 +332,13 @@ export const repostPost = async (req, res) => {
     )
     if (original.rows[0].user_id !== userId) {
       const reposter = await pool.query('SELECT full_name FROM users WHERE id = $1', [userId])
-      await createNotification(original.rows[0].user_id, 'repost', `${reposter.rows[0].full_name} reposted your post`)
+      await createNotification(
+        original.rows[0].user_id,
+        'repost',
+        `${reposter.rows[0].full_name} reposted your post`,
+        userId,
+        original.rows[0].id
+      )
     }
     res.status(201).json(result.rows[0])
   } catch (error) {
