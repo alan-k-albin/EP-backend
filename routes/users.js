@@ -1,5 +1,4 @@
 import express from 'express'
-import { ..., changeUsername } from '../controllers/userController.js'
 import {
   getMyProfile,
   getUserProfile,
@@ -13,6 +12,7 @@ import {
   updateEducation,
   deleteEducation,
   addSkill,
+  changeUsername,
   deleteSkill,
   searchUsers,
   blockUser,
