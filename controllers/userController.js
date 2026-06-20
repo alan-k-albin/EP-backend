@@ -394,3 +394,25 @@ export const reportContent = async (req, res) => {
     res.status(500).json({ message: 'Server error' })
   }
 }
+
+export const changeUsername = async (req, res) => {
+  const userId = req.user.id
+  const { username } = req.body
+  try {
+    if (!username || username.trim().length < 3) {
+      return res.status(400).json({ message: 'Username must be at least 3 characters' })
+    }
+    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+      return res.status(400).json({ message: 'Username can only contain letters, numbers and underscores' })
+    }
+    const existing = await pool.query('SELECT * FROM users WHERE username = $1 AND id != $2', [username.trim(), userId])
+    if (existing.rows.length > 0) {
+      return res.status(400).json({ message: 'Username already taken' })
+    }
+    await pool.query('UPDATE users SET username = $1 WHERE id = $2', [username.trim(), userId])
+    res.json({ message: 'Username updated successfully', username: username.trim() })
+  } catch (error) {
+    console.error('Change username error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}

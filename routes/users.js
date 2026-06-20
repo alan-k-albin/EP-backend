@@ -1,4 +1,5 @@
 import express from 'express'
+import { ..., changeUsername } from '../controllers/userController.js'
 import {
   getMyProfile,
   getUserProfile,
@@ -41,6 +42,7 @@ router.delete('/me/skill/:skillId', protect, deleteSkill)
 router.post('/block', protect, blockUser)
 router.delete('/block/:id', protect, unblockUser)
 router.post('/report', protect, reportContent)
+router.put('/me/username', protect, changeUsername)
 router.get('/:id', protect, getUserProfile)
 
 export default router
