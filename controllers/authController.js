@@ -1,6 +1,9 @@
 import pool from '../config/db.js'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import { OAuth2Client } from 'google-auth-library'
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
 
 const generateToken = (userId) => {
   return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '30d' })
@@ -56,6 +59,11 @@ export const login = async (req, res) => {
       return res.status(400).json({ message: 'Invalid email or password' })
     }
     const user = result.rows[0]
+
+    if (!user.password) {
+      return res.status(400).json({ message: 'This account uses Google Sign In. Please use the Google button to log in.' })
+    }
+
     const isMatch = await bcrypt.compare(password, user.password)
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid email or password' })
@@ -83,6 +91,91 @@ export const login = async (req, res) => {
   } catch (error) {
     console.error('Login error:', error)
     res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const googleLogin = async (req, res) => {
+  const { token } = req.body
+  try {
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    })
+    const payload = ticket.getPayload()
+    const { email, name, picture } = payload
+
+    const existing = await pool.query('SELECT * FROM users WHERE email = $1', [email])
+
+    if (existing.rows.length > 0) {
+      const user = existing.rows[0]
+
+      if (user.is_banned) {
+        return res.status(403).json({ message: 'Your account has been banned.' })
+      }
+
+      if (!user.profile_photo && picture) {
+        await pool.query('UPDATE users SET profile_photo = $1 WHERE id = $2', [picture, user.id])
+      }
+
+      return res.json({
+        token: generateToken(user.id),
+        user: {
+          id: user.id,
+          fullName: user.full_name,
+          username: user.username,
+          email: user.email,
+          college: user.college,
+          profilePhoto: user.profile_photo || picture,
+          isVerified: user.is_verified,
+          userType: user.user_type,
+          onboardingCompleted: user.onboarding_completed,
+          isAdmin: user.is_admin,
+          isBanned: user.is_banned,
+        }
+      })
+    }
+
+    // New user — create account
+    let baseUsername = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()
+    if (baseUsername.length < 3) baseUsername = baseUsername + 'user'
+
+    let username = baseUsername
+    let counter = 1
+    while (true) {
+      const usernameCheck = await pool.query('SELECT id FROM users WHERE username = $1', [username])
+      if (usernameCheck.rows.length === 0) break
+      username = `${baseUsername}${counter}`
+      counter++
+    }
+
+    const result = await pool.query(
+      `INSERT INTO users 
+      (full_name, username, email, password, profile_photo, onboarding_completed) 
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [name, username, email, null, picture || null, false]
+    )
+
+    const newUser = result.rows[0]
+
+    res.status(201).json({
+      token: generateToken(newUser.id),
+      user: {
+        id: newUser.id,
+        fullName: newUser.full_name,
+        username: newUser.username,
+        email: newUser.email,
+        college: newUser.college,
+        profilePhoto: newUser.profile_photo,
+        isVerified: newUser.is_verified,
+        userType: newUser.user_type,
+        onboardingCompleted: newUser.onboarding_completed,
+        isAdmin: newUser.is_admin,
+        isBanned: newUser.is_banned,
+      }
+    })
+  } catch (error) {
+    console.error('Google login error:', error)
+    res.status(500).json({ message: 'Google Sign In failed' })
   }
 }
 
@@ -154,6 +247,11 @@ export const changePassword = async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM users WHERE id = $1', [userId])
     const user = result.rows[0]
+
+    if (!user.password) {
+      return res.status(400).json({ message: 'Google Sign In accounts cannot change password.' })
+    }
+
     const isMatch = await bcrypt.compare(currentPassword, user.password)
     if (!isMatch) {
       return res.status(400).json({ message: 'Current password is incorrect' })
