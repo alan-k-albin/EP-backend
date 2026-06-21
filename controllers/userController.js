@@ -416,3 +416,14 @@ export const changeUsername = async (req, res) => {
     res.status(500).json({ message: 'Server error' })
   }
 }
+
+export const removeProfilePhoto = async (req, res) => {
+  const userId = req.user.id
+  try {
+    await pool.query('UPDATE users SET profile_photo = NULL WHERE id = $1', [userId])
+    res.json({ message: 'Profile photo removed' })
+  } catch (error) {
+    console.error('Remove profile photo error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}

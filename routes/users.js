@@ -13,6 +13,7 @@ import {
   deleteEducation,
   addSkill,
   changeUsername,
+  removeProfilePhoto,
   deleteSkill,
   searchUsers,
   blockUser,
@@ -43,6 +44,7 @@ router.post('/block', protect, blockUser)
 router.delete('/block/:id', protect, unblockUser)
 router.post('/report', protect, reportContent)
 router.put('/me/username', protect, changeUsername)
+router.delete('/me/profile-photo', protect, removeProfilePhoto)
 router.get('/:id', protect, getUserProfile)
 
 export default router
