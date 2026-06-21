@@ -89,12 +89,12 @@ export const login = async (req, res) => {
       }
     })
   } catch (error) {
-  console.error('Google login error:', error)
-  console.error('Message:', error.message)
+  console.error('Google login error:', error);
+  console.error('Message:', error.message);
 
   res.status(500).json({
     message: error.message
-  })
+  });
 }
 }
 
