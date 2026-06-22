@@ -1,13 +1,44 @@
 import pool from '../config/db.js'
 import bcrypt from 'bcryptjs'
 import jwt from 'jsonwebtoken'
+import crypto from 'crypto'
 import { OAuth2Client } from 'google-auth-library'
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
 
-const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '30d' })
+// Access token — short lived (15 minutes)
+const generateAccessToken = (userId) => {
+  return jwt.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '15m' })
 }
+
+// Refresh token — long lived (30 days), stored in DB
+const generateRefreshToken = () => {
+  return crypto.randomBytes(64).toString('hex')
+}
+
+// Save refresh token to DB
+const saveRefreshToken = async (userId, refreshToken) => {
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+  await pool.query(
+    'INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)',
+    [userId, refreshToken, expiresAt]
+  )
+}
+
+// Format user response
+const formatUser = (user) => ({
+  id: user.id,
+  fullName: user.full_name,
+  username: user.username,
+  email: user.email,
+  college: user.college,
+  profilePhoto: user.profile_photo,
+  isVerified: user.is_verified,
+  userType: user.user_type,
+  onboardingCompleted: user.onboarding_completed,
+  isAdmin: user.is_admin,
+  isBanned: user.is_banned,
+})
 
 export const register = async (req, res) => {
   const { fullName, username, email, college, password, userType } = req.body
@@ -28,22 +59,15 @@ export const register = async (req, res) => {
       [fullName, username, email, college, hashedPassword, userType || null, false]
     )
     const user = result.rows[0]
+    const accessToken = generateAccessToken(user.id)
+    const refreshToken = generateRefreshToken()
+    await saveRefreshToken(user.id, refreshToken)
+
     res.status(201).json({
       message: 'Account created successfully!',
-      token: generateToken(user.id),
-      user: {
-        id: user.id,
-        fullName: user.full_name,
-        username: user.username,
-        email: user.email,
-        college: user.college,
-        userType: user.user_type,
-        onboardingCompleted: user.onboarding_completed,
-        profilePhoto: user.profile_photo,
-        isVerified: user.is_verified,
-        isAdmin: user.is_admin,
-        isBanned: user.is_banned,
-      }
+      accessToken,
+      refreshToken,
+      user: formatUser(user),
     })
   } catch (error) {
     console.error('Register error:', error)
@@ -71,22 +95,16 @@ export const login = async (req, res) => {
     if (user.is_banned) {
       return res.status(403).json({ message: 'Your account has been banned. Please contact support.' })
     }
+
+    const accessToken = generateAccessToken(user.id)
+    const refreshToken = generateRefreshToken()
+    await saveRefreshToken(user.id, refreshToken)
+
     res.json({
       message: 'Login successful!',
-      token: generateToken(user.id),
-      user: {
-        id: user.id,
-        fullName: user.full_name,
-        username: user.username,
-        email: user.email,
-        college: user.college,
-        profilePhoto: user.profile_photo,
-        isVerified: user.is_verified,
-        userType: user.user_type,
-        onboardingCompleted: user.onboarding_completed,
-        isAdmin: user.is_admin,
-        isBanned: user.is_banned,
-      }
+      accessToken,
+      refreshToken,
+      user: formatUser(user),
     })
   } catch (error) {
     console.error('Login error:', error)
@@ -117,25 +135,18 @@ export const googleLogin = async (req, res) => {
         await pool.query('UPDATE users SET profile_photo = $1 WHERE id = $2', [picture, user.id])
       }
 
+      const accessToken = generateAccessToken(user.id)
+      const refreshToken = generateRefreshToken()
+      await saveRefreshToken(user.id, refreshToken)
+
       return res.json({
-        token: generateToken(user.id),
-        user: {
-          id: user.id,
-          fullName: user.full_name,
-          username: user.username,
-          email: user.email,
-          college: user.college,
-          profilePhoto: user.profile_photo || picture,
-          isVerified: user.is_verified,
-          userType: user.user_type,
-          onboardingCompleted: user.onboarding_completed,
-          isAdmin: user.is_admin,
-          isBanned: user.is_banned,
-        }
+        accessToken,
+        refreshToken,
+        user: { ...formatUser(user), profilePhoto: user.profile_photo || picture },
       })
     }
 
-    // New user — create account
+    // New user
     let baseUsername = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '').toLowerCase()
     if (baseUsername.length < 3) baseUsername = baseUsername + 'user'
 
@@ -154,28 +165,88 @@ export const googleLogin = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
       [name, username, email, null, picture || null, false]
     )
-
     const newUser = result.rows[0]
+    const accessToken = generateAccessToken(newUser.id)
+    const refreshToken = generateRefreshToken()
+    await saveRefreshToken(newUser.id, refreshToken)
 
     res.status(201).json({
-      token: generateToken(newUser.id),
-      user: {
-        id: newUser.id,
-        fullName: newUser.full_name,
-        username: newUser.username,
-        email: newUser.email,
-        college: newUser.college,
-        profilePhoto: newUser.profile_photo,
-        isVerified: newUser.is_verified,
-        userType: newUser.user_type,
-        onboardingCompleted: newUser.onboarding_completed,
-        isAdmin: newUser.is_admin,
-        isBanned: newUser.is_banned,
-      }
+      accessToken,
+      refreshToken,
+      user: formatUser(newUser),
     })
   } catch (error) {
     console.error('Google login error:', error)
     res.status(500).json({ message: 'Google Sign In failed' })
+  }
+}
+
+export const refreshToken = async (req, res) => {
+  const { refreshToken } = req.body
+  if (!refreshToken) {
+    return res.status(401).json({ message: 'Refresh token required' })
+  }
+  try {
+    // Check if refresh token exists and is not expired
+    const result = await pool.query(
+      'SELECT * FROM refresh_tokens WHERE token = $1 AND expires_at > NOW()',
+      [refreshToken]
+    )
+    if (result.rows.length === 0) {
+      return res.status(401).json({ message: 'Invalid or expired refresh token. Please log in again.' })
+    }
+
+    const tokenRow = result.rows[0]
+
+    // Check user still exists and is not banned
+    const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [tokenRow.user_id])
+    if (userResult.rows.length === 0) {
+      return res.status(401).json({ message: 'User not found' })
+    }
+
+    const user = userResult.rows[0]
+    if (user.is_banned) {
+      return res.status(403).json({ message: 'Your account has been banned.' })
+    }
+
+    // Delete old refresh token and issue new ones (rotation)
+    await pool.query('DELETE FROM refresh_tokens WHERE token = $1', [refreshToken])
+
+    const newAccessToken = generateAccessToken(user.id)
+    const newRefreshToken = generateRefreshToken()
+    await saveRefreshToken(user.id, newRefreshToken)
+
+    res.json({
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+    })
+  } catch (error) {
+    console.error('Refresh token error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const logout = async (req, res) => {
+  const { refreshToken } = req.body
+  try {
+    if (refreshToken) {
+      await pool.query('DELETE FROM refresh_tokens WHERE token = $1', [refreshToken])
+    }
+    res.json({ message: 'Logged out successfully' })
+  } catch (error) {
+    console.error('Logout error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const logoutAll = async (req, res) => {
+  const userId = req.user.id
+  try {
+    await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId])
+    res.json({ message: 'Logged out from all devices' })
+  } catch (error) {
+    console.error('Logout all error:', error)
+    res.status(500).json({ message: 'Server error' })
   }
 }
 
@@ -284,6 +355,7 @@ export const changeEmail = async (req, res) => {
 export const deleteAccount = async (req, res) => {
   const userId = req.user.id
   try {
+    await pool.query('DELETE FROM refresh_tokens WHERE user_id = $1', [userId])
     await pool.query('DELETE FROM users WHERE id = $1', [userId])
     res.json({ message: 'Account deleted successfully' })
   } catch (error) {
