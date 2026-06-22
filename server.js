@@ -3,6 +3,8 @@ import http from 'http'
 import { Server } from 'socket.io'
 import cors from 'cors'
 import dotenv from 'dotenv'
+import rateLimit from 'express-rate-limit'
+import helmet from 'helmet'
 import './config/db.js'
 import authRoutes from './routes/auth.js'
 import postRoutes from './routes/posts.js'
@@ -35,9 +37,64 @@ const io = new Server(httpServer, {
   }
 })
 
-app.use(cors({ origin: allowedOrigins }))
-app.use(express.json())
+// ── SECURITY HEADERS ──────────────────────────────────────────────────────────
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false,
+}))
 
+// ── CORS ──────────────────────────────────────────────────────────────────────
+app.use(cors({ origin: allowedOrigins }))
+
+// ── REQUEST SIZE LIMIT ────────────────────────────────────────────────────────
+app.use(express.json({ limit: '10mb' }))
+app.use(express.urlencoded({ extended: true, limit: '10mb' }))
+
+// ── RATE LIMITERS ─────────────────────────────────────────────────────────────
+
+// Auth: 5 attempts per 15 mins (stops brute force)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { message: 'Too many attempts. Please try again in 15 minutes.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+// Post creation: 5 posts per 15 mins (stops spam)
+const postCreationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { message: 'You are posting too fast. Please wait before posting again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+// Media upload: 10 uploads per 15 mins
+const mediaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { message: 'Too many uploads. Please wait before uploading again.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+// General: 100 requests per 15 mins for everything else
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { message: 'Too many requests. Please slow down.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+// ── APPLY RATE LIMITS ─────────────────────────────────────────────────────────
+app.use('/api/auth', authLimiter)
+app.use('/api/posts', postCreationLimiter)
+app.use('/api/media', mediaLimiter)
+app.use('/api', generalLimiter)
+
+// ── ROUTES ────────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes)
 app.use('/api/posts', postRoutes)
 app.use('/api/posts', commentRoutes)
@@ -52,6 +109,17 @@ app.use('/api/admin', adminRoutes)
 
 app.get('/', (req, res) => {
   res.json({ message: 'EP Backend is running!' })
+})
+
+// ── 404 HANDLER ───────────────────────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ message: 'Route not found' })
+})
+
+// ── GLOBAL ERROR HANDLER ──────────────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err)
+  res.status(500).json({ message: 'Internal server error' })
 })
 
 chatSocket(io)
