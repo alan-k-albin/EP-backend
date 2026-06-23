@@ -52,52 +52,70 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
 // ── RATE LIMITERS ─────────────────────────────────────────────────────────────
 
-// Auth: 5 attempts per 15 mins (stops brute force)
+// Auth limiter — keyed by IP + email so each user gets their own limit
+// This means 5 attempts per user per 15 mins, not 5 attempts total for all users
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
-  message: { message: 'Too many attempts. Please try again in 15 minutes.' },
+  // Key by IP + email combined — each user on same network gets own counter
+  keyGenerator: (req) => {
+    const email = req.body?.email || req.body?.token || 'unknown'
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    return `${ip}_${email}`
+  },
+  skip: (req) => req.method === 'GET', // Never limit GET requests like /auth/me
+  message: { message: 'Too many login attempts for this account. Please try again in 15 minutes.' },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.method === 'GET', // Don't limit GET /auth/me
 })
 
-// Post creation: 5 posts per 15 mins (stops spam)
+// Post creation: 5 posts per 15 mins per user
 const postCreationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
+  keyGenerator: (req) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    const auth = req.headers.authorization || 'unknown'
+    return `${ip}_${auth}`
+  },
+  skip: (req) => req.method !== 'POST',
   message: { message: 'You are posting too fast. Please wait before posting again.' },
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.method !== 'POST', // Only limit POST requests
 })
 
-// Media upload: 10 uploads per 15 mins
+// Media upload: 10 uploads per 15 mins per user
 const mediaLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
+  keyGenerator: (req) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    const auth = req.headers.authorization || 'unknown'
+    return `${ip}_${auth}`
+  },
   message: { message: 'Too many uploads. Please wait before uploading again.' },
   standardHeaders: true,
   legacyHeaders: false,
 })
 
-// General: 100 requests per 15 mins
-// Applied to all routes EXCEPT auth and media (they have their own limiters)
+// General: 100 requests per 15 mins per user
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
+  keyGenerator: (req) => {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    const auth = req.headers.authorization || 'unknown'
+    return `${ip}_${auth}`
+  },
   message: { message: 'Too many requests. Please slow down.' },
   standardHeaders: true,
   legacyHeaders: false,
 })
 
 // ── APPLY RATE LIMITS ─────────────────────────────────────────────────────────
-// Apply specific limiters first, then general to remaining routes
 app.use('/api/auth', authLimiter)
 app.use('/api/posts', postCreationLimiter)
 app.use('/api/media', mediaLimiter)
-
-// General limiter excludes auth, posts and media (already limited above)
 app.use('/api/connections', generalLimiter)
 app.use('/api/users', generalLimiter)
 app.use('/api/notifications', generalLimiter)
