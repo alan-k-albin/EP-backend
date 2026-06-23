@@ -59,6 +59,7 @@ const authLimiter = rateLimit({
   message: { message: 'Too many attempts. Please try again in 15 minutes.' },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.method === 'GET', // Don't limit GET /auth/me
 })
 
 // Post creation: 5 posts per 15 mins (stops spam)
@@ -68,6 +69,7 @@ const postCreationLimiter = rateLimit({
   message: { message: 'You are posting too fast. Please wait before posting again.' },
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.method !== 'POST', // Only limit POST requests
 })
 
 // Media upload: 10 uploads per 15 mins
@@ -79,7 +81,8 @@ const mediaLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-// General: 100 requests per 15 mins for everything else
+// General: 100 requests per 15 mins
+// Applied to all routes EXCEPT auth and media (they have their own limiters)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
@@ -89,10 +92,19 @@ const generalLimiter = rateLimit({
 })
 
 // ── APPLY RATE LIMITS ─────────────────────────────────────────────────────────
+// Apply specific limiters first, then general to remaining routes
 app.use('/api/auth', authLimiter)
 app.use('/api/posts', postCreationLimiter)
 app.use('/api/media', mediaLimiter)
-app.use('/api', generalLimiter)
+
+// General limiter excludes auth, posts and media (already limited above)
+app.use('/api/connections', generalLimiter)
+app.use('/api/users', generalLimiter)
+app.use('/api/notifications', generalLimiter)
+app.use('/api/search', generalLimiter)
+app.use('/api/chat', generalLimiter)
+app.use('/api/polls', generalLimiter)
+app.use('/api/admin', generalLimiter)
 
 // ── ROUTES ────────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes)
