@@ -32,7 +32,16 @@ export const getMyChats = async (req, res) => {
         SELECT m.created_at FROM messages m
         WHERE m.chat_id = c.id
         ORDER BY m.created_at DESC LIMIT 1
-      ) as last_message_time
+      ) as last_message_time,
+      (
+        SELECT COUNT(*) FROM messages m
+        WHERE m.chat_id = c.id
+        AND m.sender_id != $1
+        AND m.created_at > COALESCE(
+          (SELECT last_read_at FROM chat_members WHERE chat_id = c.id AND user_id = $1),
+          '1970-01-01'
+        )
+      ) as unread_count
       FROM chats c
       JOIN chat_members cm ON cm.chat_id = c.id
       WHERE cm.user_id = $1
@@ -42,6 +51,43 @@ export const getMyChats = async (req, res) => {
     res.json(result.rows)
   } catch (error) {
     console.error('Get chats error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const getUnreadChatCount = async (req, res) => {
+  const userId = req.user.id
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(DISTINCT c.id) as unread_chats
+      FROM chats c
+      JOIN chat_members cm ON cm.chat_id = c.id AND cm.user_id = $1
+      WHERE (
+        SELECT COUNT(*) FROM messages m
+        WHERE m.chat_id = c.id
+        AND m.sender_id != $1
+        AND m.created_at > COALESCE(cm.last_read_at, '1970-01-01')
+      ) > 0`,
+      [userId]
+    )
+    res.json({ count: result.rows[0].unread_chats })
+  } catch (error) {
+    console.error('Get unread chat count error:', error)
+    res.status(500).json({ message: 'Server error' })
+  }
+}
+
+export const markChatAsRead = async (req, res) => {
+  const { id } = req.params
+  const userId = req.user.id
+  try {
+    await pool.query(
+      'UPDATE chat_members SET last_read_at = NOW() WHERE chat_id = $1 AND user_id = $2',
+      [id, userId]
+    )
+    res.json({ message: 'Chat marked as read' })
+  } catch (error) {
+    console.error('Mark chat as read error:', error)
     res.status(500).json({ message: 'Server error' })
   }
 }
@@ -57,6 +103,11 @@ export const getChatMessages = async (req, res) => {
     if (memberCheck.rows.length === 0) {
       return res.status(403).json({ message: 'Not a member of this chat' })
     }
+    // Mark as read when messages are fetched
+    await pool.query(
+      'UPDATE chat_members SET last_read_at = NOW() WHERE chat_id = $1 AND user_id = $2',
+      [id, userId]
+    )
     const result = await pool.query(
       `SELECT m.*, u.full_name, u.username, u.profile_photo
       FROM messages m
