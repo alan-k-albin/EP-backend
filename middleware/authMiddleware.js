@@ -8,10 +8,17 @@ const protect = async (req, res, next) => {
     try {
       token = req.headers.authorization.split(' ')[1]
 
+      // Reject obviously malformed tokens
+      if (!token || token.length < 10) {
+        return res.status(401).json({ message: 'Not authorized, invalid token' })
+      }
+
       const decoded = jwt.verify(token, process.env.JWT_SECRET)
 
       const result = await pool.query(
-        'SELECT id, full_name, username, email, user_type, is_admin, is_banned, profile_photo, is_verified, onboarding_completed FROM users WHERE id = $1',
+        `SELECT id, full_name, username, email, user_type, is_admin, 
+         is_banned, profile_photo, is_verified, onboarding_completed 
+         FROM users WHERE id = $1`,
         [decoded.id]
       )
 
@@ -21,7 +28,7 @@ const protect = async (req, res, next) => {
 
       const user = result.rows[0]
 
-      // Block banned users immediately even with valid token
+      // Block banned users immediately on every request
       if (user.is_banned) {
         return res.status(403).json({ message: 'Your account has been banned. Please contact support.' })
       }
@@ -32,9 +39,15 @@ const protect = async (req, res, next) => {
       if (error.name === 'TokenExpiredError') {
         return res.status(401).json({ message: 'Session expired. Please log in again.' })
       }
-      return res.status(401).json({ message: 'Not authorized, invalid token' })
+      if (error.name === 'JsonWebTokenError') {
+        return res.status(401).json({ message: 'Not authorized, invalid token' })
+      }
+      if (error.name === 'NotBeforeError') {
+        return res.status(401).json({ message: 'Token not yet valid' })
+      }
+      return res.status(401).json({ message: 'Not authorized' })
     }
-  } else if (!token) {
+  } else {
     return res.status(401).json({ message: 'Not authorized, no token' })
   }
 }
