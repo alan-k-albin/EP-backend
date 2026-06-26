@@ -6,6 +6,8 @@ import dotenv from 'dotenv'
 import rateLimit from 'express-rate-limit'
 import helmet from 'helmet'
 import hpp from 'hpp'
+import xss from 'xss'
+import jwt from 'jsonwebtoken'
 import './config/db.js'
 import authRoutes from './routes/auth.js'
 import postRoutes from './routes/posts.js'
@@ -41,12 +43,31 @@ const io = new Server(httpServer, {
 // ── SECURITY HEADERS ──────────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
-  contentSecurityPolicy: false,
   hsts: {
-    maxAge: 31536000, // 1 year
+    maxAge: 31536000,
     includeSubDomains: true,
     preload: true,
   },
+  // Production-grade Content Security Policy
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],   // unsafe-inline needed for most React setups
+      imgSrc: ["'self'", 'data:', 'https://res.cloudinary.com', 'https://lh3.googleusercontent.com'],
+      connectSrc: ["'self'", ...allowedOrigins],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'", 'https://res.cloudinary.com'],
+      frameSrc: ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+  noSniff: true,         // X-Content-Type-Options: nosniff
+  xssFilter: true,       // X-XSS-Protection
+  hidePoweredBy: true,   // Remove X-Powered-By: Express
 }))
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
@@ -63,47 +84,55 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
 }))
 
-// ── REQUEST SIZE LIMIT ────────────────────────────────────────────────────────
-app.use(express.json({ limit: '10mb' }))
-app.use(express.urlencoded({ extended: true, limit: '10mb' }))
+// ── REQUEST SIZE LIMITS ───────────────────────────────────────────────────────
+// 50kb for JSON API — media goes through Cloudinary, not JSON body
+app.use(express.json({ limit: '50kb' }))
+app.use(express.urlencoded({ extended: true, limit: '50kb' }))
 
 // ── HTTP PARAMETER POLLUTION PROTECTION ───────────────────────────────────────
-// Prevents attacks like ?email=a&email=b&email=c
 app.use(hpp())
 
-// ── XSS SANITIZATION ─────────────────────────────────────────────────────────
-// Strip malicious HTML/JS from request body, params, query
-app.use((req, res, next) => {
-  const sanitize = (obj) => {
-    if (!obj) return obj
-    for (const key in obj) {
-      if (typeof obj[key] === 'string') {
-        obj[key] = obj[key]
-          .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-          .replace(/javascript:/gi, '')
-          .replace(/on\w+\s*=/gi, '')
-          .trim()
-      } else if (typeof obj[key] === 'object') {
-        sanitize(obj[key])
-      }
+// ── XSS SANITIZATION (xss library — not regex) ────────────────────────────────
+// Handles encoded variants, SVG injection, attribute injection etc.
+const xssOptions = {
+  whiteList: {},          // No tags allowed — strip everything
+  stripIgnoreTag: true,
+  stripIgnoreTagBody: ['script', 'style'],
+}
+
+const sanitizeValue = (value) => {
+  if (typeof value === 'string') return xss(value, xssOptions)
+  if (typeof value === 'object' && value !== null) return sanitizeObject(value)
+  return value
+}
+
+const sanitizeObject = (obj) => {
+  if (Array.isArray(obj)) return obj.map(sanitizeValue)
+  const clean = {}
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      clean[key] = sanitizeValue(obj[key])
     }
-    return obj
   }
-  req.body = sanitize(req.body)
-  req.query = sanitize(req.query)
-  req.params = sanitize(req.params)
+  return clean
+}
+
+app.use((req, res, next) => {
+  if (req.body) req.body = sanitizeObject(req.body)
+  if (req.query) req.query = sanitizeObject(req.query)
+  if (req.params) req.params = sanitizeObject(req.params)
   next()
 })
 
 // ── RATE LIMITERS ─────────────────────────────────────────────────────────────
 
-// Auth limiter — per IP + email (stops brute force per account)
+// Auth limiter — per IP + email
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   keyGenerator: (req) => {
     const email = req.body?.email || req.body?.token || 'unknown'
-    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown'
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown'
     return `auth_${ip}_${email}`
   },
   skip: (req) => req.method === 'GET',
@@ -112,13 +141,32 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-// Post creation: 5 posts per 15 mins per user
+// Forgot password — tighter limit to prevent token-farming
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour window
+  max: 3,                    // Only 3 reset requests per hour per IP
+  keyGenerator: (req) => {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown'
+    return `forgot_${ip}`
+  },
+  message: { message: 'Too many password reset requests. Please try again in an hour.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+})
+
+// Post creation — keyed on decoded JWT user ID (not raw header, rotates)
 const postCreationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   keyGenerator: (req) => {
-    const auth = req.headers.authorization || 'unknown'
-    return `post_${auth}`
+    try {
+      const token = req.headers.authorization?.split(' ')[1]
+      if (!token) return `post_${req.ip}`
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] })
+      return `post_user_${decoded.id}`
+    } catch {
+      return `post_${req.ip}`
+    }
   },
   skip: (req) => req.method !== 'POST',
   message: { message: 'You are posting too fast. Please wait before posting again.' },
@@ -126,26 +174,38 @@ const postCreationLimiter = rateLimit({
   legacyHeaders: false,
 })
 
-// Media upload: 10 uploads per 15 mins per user
+// Media upload — keyed on decoded JWT user ID
 const mediaLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   keyGenerator: (req) => {
-    const auth = req.headers.authorization || 'unknown'
-    return `media_${auth}`
+    try {
+      const token = req.headers.authorization?.split(' ')[1]
+      if (!token) return `media_${req.ip}`
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] })
+      return `media_user_${decoded.id}`
+    } catch {
+      return `media_${req.ip}`
+    }
   },
   message: { message: 'Too many uploads. Please wait before uploading again.' },
   standardHeaders: true,
   legacyHeaders: false,
 })
 
-// General: 100 requests per 15 mins per user
+// General — keyed on decoded JWT user ID
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
   keyGenerator: (req) => {
-    const auth = req.headers.authorization || req.ip || 'unknown'
-    return `general_${auth}`
+    try {
+      const token = req.headers.authorization?.split(' ')[1]
+      if (!token) return `general_${req.ip}`
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] })
+      return `general_user_${decoded.id}`
+    } catch {
+      return `general_${req.ip}`
+    }
   },
   message: { message: 'Too many requests. Please slow down.' },
   standardHeaders: true,
@@ -153,7 +213,9 @@ const generalLimiter = rateLimit({
 })
 
 // ── APPLY RATE LIMITS ─────────────────────────────────────────────────────────
-app.use('/api/auth', authLimiter)
+app.use('/api/auth/login', authLimiter)
+app.use('/api/auth/google', authLimiter)
+app.use('/api/auth/forgot-password', forgotPasswordLimiter)
 app.use('/api/posts', postCreationLimiter)
 app.use('/api/media', mediaLimiter)
 app.use('/api/connections', generalLimiter)
@@ -188,7 +250,6 @@ app.use((req, res) => {
 
 // ── GLOBAL ERROR HANDLER ──────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  // Never expose error details in production
   console.error('Unhandled error:', err)
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({ message: 'CORS error: Origin not allowed' })
